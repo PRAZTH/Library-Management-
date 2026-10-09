@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library Manager</title>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--ink:#1c2333;--mut:#6b7488;--line:#e3e7ef;--pri:#2457d6;--pri2:#1b44ab;--ok:#16874a;--warn:#c27803;--bad:#c62f3b}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+.top{display:flex;align-items:center;justify-content:space-between;height:56px}
+.brand{font-weight:700;font-size:17px}
+.date{color:var(--mut);font-size:12px}
+nav{display:flex;gap:4px;overflow-x:auto;padding-bottom:8px}
+nav button{border:0;background:none;padding:8px 14px;border-radius:8px;color:var(--mut);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+nav button.on{background:var(--pri);color:#fff}
+main{padding:20px 16px 60px}
+.grid{display:grid;gap:14px}
+.stats{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.stat b{display:block;font-size:26px;margin-top:2px}
+.stat span{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+h2{font-size:16px;margin:0 0 12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut);font-weight:600;flex:1;min-width:150px}
+input,select{font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+input:focus,select:focus{outline:2px solid #b9cbf7;border-color:var(--pri)}
+button.btn{font:inherit;font-weight:600;padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer}
+button.btn:hover{background:#f0f3f9}
+button.pri{background:var(--pri);border-color:var(--pri);color:#fff}
+button.pri:hover{background:var(--pri2)}
+button.sm{padding:5px 10px;font-size:12px}
+button.danger{color:var(--bad)}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700}
+.t-ok{background:#e3f6ec;color:var(--ok)}.t-warn{background:#fdf0d5;color:var(--warn)}.t-bad{background:#fbe4e6;color:var(--bad)}.t-n{background:#eceff5;color:var(--mut)}
+.empty{text-align:center;color:var(--mut);padding:28px 10px}
+.sub{color:var(--mut);font-size:12px}
+.two{grid-template-columns:340px 1fr}
+@media(max-width:820px){.two{grid-template-columns:1fr}}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:20}
+#toast div{background:#1c2333;color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+#toast div.err{background:var(--bad)}
+@media print{header nav,.noprint{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="top"><div class="brand" id="brand">Library Manager</div><div class="date" id="today"></div></div>
+    <nav id="nav"></nav>
+  </div>
+</header>
+<main class="wrap" id="view"></main>
+<div id="toast"></div>
+
+<script>
+const KEY = 'library_manager_v1';
+const TABS = [['dash','Dashboard'],['circ','Issue & Return'],['books','Books'],['members','Members'],['fines','Fines'],['settings','Settings']];
+let tab = 'dash';
+let q = { loans:'', books:'', members:'' };
+
+/* ---------- storage ---------- */
+function fresh(){ return { settings:{ name:'My Library', rate:10, days:14, limit:100 }, books:[], members:[], loans:[], fines:[], seq:1 }; }
+function load(){
+  try { const r = localStorage.getItem(KEY); if (r) return Object.assign(fresh(), JSON.parse(r)); } catch(e){}
+  return fresh();
+}
+let S = load();
+function save(){
+  try { localStorage.setItem(KEY, JSON.stringify(S)); }
+  catch(e){ toast('Could not save. Browser storage is blocked.', true); }
+}
+const nid = () => S.seq++;
+
+/* ---------- helpers ---------- */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const inr = n => '₹' + Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+const pad = n => String(n).padStart(2,'0');
+const fmt = d => d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+const today = () => fmt(new Date());
+const addDays = (s,n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate()+n); return fmt(d); };
+const diff = (a,b) => Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00')) / 864e5);
+const showDate = s => { const d = new Date(s+'T00:00:00'); return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); };
+const book = i => S.books.find(b => b.id === i);
+const member = i => S.members.find(m => m.id === i);
+const active = () => S.loans.filter(l => !l.returned);
+const copiesOut = bid => active().filter(l => l.book === bid).length;
+const avail = b => b.copies - copiesOut(b.id);
+const unpaid = mid => S.fines.filter(f => f.member === mid && !f.paid).reduce((s,f) => s + f.amount, 0);
+const blocked = mid => unpaid(mid) > S.settings.limit;
+const lateDays = l => Math.max(0, diff(l.due, l.returned || today()));
+const val = id => document.getElementById(id).value.trim();
+
+function toast(msg, err){
+  const el = document.createElement('div');
+  el.textContent = msg; if (err) el.className = 'err';
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+function tag(text, cls){ return `<span class="tag ${cls}">${text}</span>`; }
+function table(heads, rows, emptyMsg){
+  if (!rows.length) return `<div class="empty">${emptyMsg}</div>`;
+  return `<div class="tablewrap"><table><thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+}
+
+/* ---------- actions ---------- */
+function addBook(e){
+  e.preventDefault();
+  const copies = parseInt(val('bk-copies'), 10);
+  if (!(copies >= 1)) return toast('Copies must be at least 1.', true);
+  S.books.push({ id:nid(), title:val('bk-title'), author:val('bk-author'), category:val('bk-cat'), copies });
+  save(); toast('Book added.'); render();
+}
+function delBook(id){
+  if (copiesOut(id)) return toast('This book has active loans. Return them first.', true);
+  if (!confirm('Delete this book from the catalogue?')) return;
+  S.books = S.books.filter(b => b.id !== id); save(); render();
+}
+function addCopies(id){
+  const b = book(id); b.copies++; save(); render();
+}
+function removeCopy(id){
+  const b = book(id);
+  if (b.copies - 1 < copiesOut(id) || b.copies <= 1) return toast('Cannot reduce below copies currently issued (or below 1).', true);
+  b.copies--; save(); render();
+}
+function addMember(e){
+  e.preventDefault();
+  S.members.push({ id:nid(), name:val('mb-name'), phone:val('mb-phone'), email:val('mb-email'), joined:today() });
+  save(); toast('Member added.'); render();
+}
+function delMember(id){
+  if (active().some(l => l.member === id)) return toast('This member has books out. Return them first.', true);
+  if (unpaid(id) > 0) return toast('This member has unpaid fines.', true);
+  if (!confirm('Delete this member?')) return;
+  S.members = S.members.filter(m => m.id !== id); save(); render();
+}
+function issueBook(e){
+  e.preventDefault();
+  const mid = parseInt(val('is-member'), 10), bid = parseInt(val('is-book'), 10);
+  const m = member(mid), b = book(bid);
+  if (!m || !b) return toast('Select a member and a book.', true);
+  if (blocked(mid)) return toast(`${m.name} owes ${inr(unpaid(mid))}. Fines must be cleared below ${inr(S.settings.limit)} first.`, true);
+  if (avail(b) <= 0) return toast('No copies available.', true);
+  if (active().some(l => l.member === mid && l.book === bid)) return toast('This member already has this book.', true);
+  const issued = today();
+  S.loans.push({ id:nid(), book:bid, member:mid, issued, due:addDays(issued, S.settings.days), returned:null });
+  save(); toast(`Issued to ${m.name}. Due ${showDate(addDays(issued, S.settings.days))}.`); render();
+}
+function returnBook(id){
+  const l = S.loans.find(x => x.id === id); if (!l || l.returned) return;
+  l.returned = today();
+  const days = lateDays(l);
+  if (days > 0){
+    const amount = days * S.settings.rate;
+    S.fines.push({ id:nid(), loan:id, member:l.member, amount, days, paid:false, date:today() });
+    toast(`Returned ${days} day(s) late. Fine ${inr(amount)} recorded.`);
+  } else toast('Returned on time.');
+  save(); render();
+}
+function payFine(id){
+  const f = S.fines.find(x => x.id === id); if (!f) return;
+  f.paid = true; f.paidOn = today(); save(); toast(`${inr(f.amount)} collected.`); render();
+}
+function waiveFine(id){
+  if (!confirm('Waive this fine? It will be marked as cleared with no payment.')) return;
+  const f = S.fines.find(x => x.id === id); f.paid = true; f.waived = true; f.paidOn = today(); save(); render();
+}
+function saveSettings(e){
+  e.preventDefault();
+  const rate = parseFloat(val('st-rate')), days = parseInt(val('st-days'), 10), limit = parseFloat(val('st-limit'));
+  if (!(rate >= 0) || !(days >= 1) || !(limit >= 0)) return toast('Please enter valid numbers.', true);
+  S.settings = { name: val('st-name') || 'My Library', rate, days, limit };
+  save(); toast('Settings saved. New rules apply to future loans and returns.'); render();
+}
+function exportData(){
+  const blob = new Blob([JSON.stringify(S, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'library-backup-' + today() + '.json'; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function importData(ev){
+  const file = ev.target.files[0]; if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      if (!d.books || !d.members || !d.loans || !d.fines) throw new Error('bad');
+      if (!confirm('Replace ALL current data with this backup?')) return;
+      S = Object.assign(fresh(), d); save(); toast('Backup restored.'); render();
+    } catch(e){ toast('That file is not a valid backup.', true); }
+  };
+  r.readAsText(file);
+}
+function resetAll(){
+  if (!confirm('Delete ALL books, members, loans and fines? This cannot be undone.')) return;
+  if (!confirm('Last check: have you exported a backup?')) return;
+  S = fresh(); save(); render(); toast('All data cleared.');
+}
+function exportCSV(kind){
+  let rows = [];
+  if (kind === 'loans'){
+    rows.push(['Loan','Book','Member','Issued','Due','Returned','Days late']);
+    S.loans.forEach(l => rows.push([l.id, book(l.book)?.title, member(l.member)?.name, l.issued, l.due, l.returned || '', lateDays(l)]));
+  } else {
+    rows.push(['Fine','Member','Loan','Days late','Amount (INR)','Status','Date']);
+    S.fines.forEach(f => rows.push([f.id, member(f.member)?.name, f.loan, f.days, f.amount, f.waived ? 'Waived' : f.paid ? 'Paid' : 'Unpaid', f.date]));
+  }
+  const csv = rows.map(r => r.map(c => '"' + String(c ?? '').replace(/"/g,'""') + '"').join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], {type:'text/csv'}));
+  a.download = kind + '-' + today() + '.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ---------- views ---------- */
+function vDash(){
+  const act = active();
+  const late = act.filter(l => lateDays(l) > 0);
+  const owed = S.fines.filter(f => !f.paid).reduce((s,f) => s + f.amount, 0);
+  const accruing = late.reduce((s,l) => s + lateDays(l) * S.settings.rate, 0);
+  const totalCopies = S.books.reduce((s,b) => s + b.copies, 0);
+  const rows = late.sort((a,b) => lateDays(b) - lateDays(a)).map(l => `<tr>
+    <td>${esc(book(l.book)?.title)}</td><td>${esc(member(l.member)?.name)}</td><td>${showDate(l.due)}</td>
+    <td>${tag(lateDays(l)+' days late','t-bad')}</td><td>${inr(lateDays(l)*S.settings.rate)}</td></tr>`);
+  const empty = !S.books.length && !S.members.length;
+  return `
+  ${empty ? `<div class="card" style="margin-bottom:16px;border-color:#b9cbf7;background:#f3f7ff"><b>Welcome.</b> Start by adding your books in <a href="#" onclick="go('books');return false">Books</a> and your members in <a href="#" onclick="go('members');return false">Members</a>. Then issue books from <a href="#" onclick="go('circ');return false">Issue &amp; Return</a>. Check <a href="#" onclick="go('settings');return false">Settings</a> for the fine rate and loan period.</div>` : ''}
+  <div class="grid stats">
+    <div class="card stat"><span>Book titles</span><b>${S.books.length}</b><div class="sub">${totalCopies} copies in total</div></div>
+    <div class="card stat"><span>Currently issued</span><b>${act.length}</b><div class="sub">${S.members.length} members registered</div></div>
+    <div class="card stat"><span>Overdue now</span><b style="color:var(--warn)">${late.length}</b><div class="sub">Accruing ${inr(accruing)}</div></div>
+    <div class="card stat"><span>Fines to collect</span><b style="color:var(--bad)">${inr(owed)}</b><div class="sub">${S.fines.filter(f=>!f.paid).length} unpaid</div></div>
+  </div>
+  <div class="card"><h2>Overdue books</h2>${table(['Book','Member','Was due','Late','Fine so far'], rows, 'Nothing is overdue.')}</div>`;
+}
+
+function vCirc(){
+  const mOpts = S.members.map(m => `<option value="${m.id}">${esc(m.name)}${blocked(m.id) ? ' (blocked: fines)' : ''}</option>`).join('');
+  const bOpts = S.books.filter(b => avail(b) > 0).map(b => `<option value="${b.id}">${esc(b.title)} (${avail(b)} left)</option>`).join('');
+  const term = q.loans.toLowerCase();
+  const rows = active().filter(l => (book(l.book)?.title + ' ' + member(l.member)?.name).toLowerCase().includes(term))
+    .sort((a,b) => a.due.localeCompare(b.due)).map(l => {
+      const d = lateDays(l);
+      return `<tr>
+        <td><b>${esc(book(l.book)?.title)}</b><div class="sub">${esc(book(l.book)?.author)}</div></td>
+        <td>${esc(member(l.member)?.name)}</td><td>${showDate(l.due)}</td>
+        <td>${d > 0 ? tag(d+' days late','t-bad') : tag('On time','t-ok')}</td>
+        <td>${d > 0 ? inr(d*S.settings.rate) : '–'}</td>
+        <td><button class="btn sm pri" onclick="returnBook(${l.id})">Return</button></td></tr>`;
+    });
+  return `<div class="grid two">
+    <div class="card"><h2>Issue a book</h2>
+      <form onsubmit="issueBook(event)" class="grid" style="gap:12px">
+        <label>Member<select id="is-member" required><option value="">Choose member</option>${mOpts}</select></label>
+        <label>Book<select id="is-book" required><option value="">Choose book</option>${bOpts}</select></label>
+        <div class="sub">Loan period ${S.settings.days} days. Late fine ${inr(S.settings.rate)} per day. Members owing more than ${inr(S.settings.limit)} are blocked.</div>
+        <button class="btn pri" ${!S.members.length || !S.books.length ? 'disabled' : ''}>Issue book</button>
+        ${!S.members.length || !S.books.length ? '<div class="sub">Add at least one member and one book first.</div>' : ''}
+      </form></div>
+    <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Books currently out</h2>
+      <input placeholder="Search…" value="${esc(q.loans)}" oninput="q.loans=this.value;keepFocus('circ',this)" style="max-width:200px"></div>
+      ${table(['Book','Member','Due','Status','Fine now',''], rows, 'No books are currently issued.')}
+      <div class="row noprint" style="margin-top:10px"><button class="btn sm" onclick="exportCSV('loans')">Export all loans (CSV)</button></div>
+    </div></div>`;
+}
+
+function vBooks(){
+  const term = q.books.toLowerCase();
+  const rows = S.books.filter(b => (b.title+' '+b.author+' '+b.category).toLowerCase().includes(term)).map(b => `<tr>
+    <td><b>${esc(b.title)}</b><div class="sub">${esc(b.author)}</div></td><td>${esc(b.category || '–')}</td>
+    <td>${avail(b)} / ${b.copies} ${avail(b) === 0 ? tag('Out','t-bad') : ''}</td>
+    <td style="white-space:nowrap"><button class="btn sm" onclick="removeCopy(${b.id})">−</button> <button class="btn sm" onclick="addCopies(${b.id})">+</button>
+    <button class="btn sm danger" onclick="delBook(${b.id})">Delete</button></td></tr>`);
+  return `<div class="grid two">
+    <div class="card"><h2>Add a book</h2>
+      <form onsubmit="addBook(event)" class="grid" style="gap:12px">
+        <label>Title<input id="bk-title" required></label>
+        <label>Author<input id="bk-author" required></label>
+        <label>Category / shelf<input id="bk-cat" placeholder="e.g. Science, Fiction"></label>
+        <label>Number of copies<input id="bk-copies" type="number" min="1" value="1" required></label>
+        <button class="btn pri">Add book</button>
+      </form></div>
+    <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Catalogue</h2>
+      <input placeholder="Search…" value="${esc(q.books)}" oninput="q.books=this.value;keepFocus('books',this)" style="max-width:200px"></div>
+      ${table(['Book','Category','Available','Copies'], rows, 'No books yet. Add your first book.')}</div></div>`;
+}
+
+function vMembers(){
+  const term = q.members.toLowerCase();
+  const rows = S.members.filter(m => (m.name+' '+m.phone+' '+m.email).toLowerCase().includes(term)).map(m => {
+    const u = unpaid(m.id), out = active().filter(l => l.member === m.id).length;
+    return `<tr><td><b>${esc(m.name)}</b><div class="sub">${esc([m.phone, m.email].filter(Boolean).join(' · '))}</div></td>
+      <td>${showDate(m.joined)}</td><td>${out}</td>
+      <td>${u > 0 ? inr(u) : '–'}</td>
+      <td>${blocked(m.id) ? tag('Blocked','t-bad') : tag('Active','t-ok')}</td>
+      <td><button class="btn sm danger" onclick="delMember(${m.id})">Delete</button></td></tr>`;
+  });
+  return `<div class="grid two">
+    <div class="card"><h2>Add a member</h2>
+      <form onsubmit="addMember(event)" class="grid" style="gap:12px">
+        <label>Full name<input id="mb-name" required></label>
+        <label>Phone<input id="mb-phone" type="tel"></label>
+        <label>Email<input id="mb-email" type="email"></label>
+        <button class="btn pri">Add member</button>
+      </form></div>
+    <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Members</h2>
+      <input placeholder="Search…" value="${esc(q.members)}" oninput="q.members=this.value;keepFocus('members',this)" style="max-width:200px"></div>
+      ${table(['Member','Joined','Books out','Unpaid fines','Status',''], rows, 'No members yet. Add your first member.')}</div></div>`;
+}
+
+function vFines(){
+  const un = S.fines.filter(f => !f.paid), done = S.fines.filter(f => f.paid).slice().reverse().slice(0, 30);
+  const r1 = un.map(f => `<tr><td>${esc(member(f.member)?.name)}</td><td>${esc(book(S.loans.find(l=>l.id===f.loan)?.book)?.title)}</td>
+    <td>${f.days}</td><td><b>${inr(f.amount)}</b></td>
+    <td style="white-space:nowrap"><button class="btn sm pri" onclick="payFine(${f.id})">Mark paid</button> <button class="btn sm" onclick="waiveFine(${f.id})">Waive</button></td></tr>`);
+  const r2 = done.map(f => `<tr><td>${esc(member(f.member)?.name)}</td><td>${f.days}</td><td>${inr(f.amount)}</td><td>${showDate(f.paidOn || f.date)}</td><td>${f.waived ? tag('Waived','t-n') : tag('Paid','t-ok')}</td></tr>`);
+  return `<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between"><h2>Unpaid fines</h2><button class="btn sm noprint" onclick="exportCSV('fines')">Export fines (CSV)</button></div>
+    ${table(['Member','Book','Days late','Amount',''], r1, 'No unpaid fines.')}</div>
+    <div class="card"><h2>Recently cleared</h2>${table(['Member','Days late','Amount','Date','Status'], r2, 'Nothing cleared yet.')}</div>`;
+}
+
+function vSettings(){
+  const s = S.settings;
+  return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    <div class="card"><h2>Library rules</h2>
+      <form onsubmit="saveSettings(event)" class="grid" style="gap:12px">
+        <label>Library name<input id="st-name" value="${esc(s.name)}"></label>
+        <label>Loan period (days)<input id="st-days" type="number" min="1" value="${s.days}"></label>
+        <label>Fine per late day (₹)<input id="st-rate" type="number" min="0" step="0.5" value="${s.rate}"></label>
+        <label>Block borrowing when unpaid fines exceed (₹)<input id="st-limit" type="number" min="0" step="1" value="${s.limit}"></label>
+        <button class="btn pri">Save settings</button>
+      </form></div>
+    <div class="card"><h2>Your data</h2>
+      <p class="sub">Everything is saved in this browser on this computer. Use the same browser each time, and take a backup regularly.</p>
+      <div class="row">
+        <button class="btn" onclick="exportData()">Download backup</button>
+        <label class="btn" style="flex:none;min-width:0;flex-direction:row;cursor:pointer;color:var(--ink);font-size:14px">Restore backup<input type="file" accept=".json" onchange="importData(event)" hidden></label>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+      <button class="btn danger" onclick="resetAll()">Delete all data</button>
+    </div></div>`;
+}
+
+/* ---------- shell ---------- */
+const VIEWS = { dash:vDash, circ:vCirc, books:vBooks, members:vMembers, fines:vFines, settings:vSettings };
+function go(t){ tab = t; render(); window.scrollTo(0,0); }
+function render(){
+  document.getElementById('brand').textContent = S.settings.name;
+  document.title = S.settings.name;
+  document.getElementById('today').textContent = new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  document.getElementById('nav').innerHTML = TABS.map(([k,l]) => `<button class="${k===tab?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+  document.getElementById('view').innerHTML = VIEWS[tab]();
+}
+// re-render while typing in a search box, then restore focus and caret
+function keepFocus(t, el){
+  const pos = el.selectionStart;
+  render();
+  const inp = document.querySelector('#view input[placeholder="Search…"]');
+  if (inp){ inp.focus(); inp.setSelectionRange(pos, pos); }
+}
+render();
+</script>
+</body>
+</html>
